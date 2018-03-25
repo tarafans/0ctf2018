@@ -1,13 +1,13 @@
-#define ZERO_MAGIC 0x4f52455a
+#define ZEROFS_MAGIC 0x4f52455a
 
-#define ZERO_DEFAULT_BLOCK_SIZE 4096
+#define ZEROFS_DEFAULT_BLOCK_SIZE 4096
 
-#define ZERO_FILENAME_MAXLEN 255
+#define ZEROFS_NAME_LEN 255
 
-#define ZERO_START_INO 10
+#define ZEROFS_START_INO 0x1337
 
-/* for sb, inode store, data block */
-#define ZERO_RESERVED_INODES 3 
+/* for sb, inode store, root_dir's data */
+#define ZEROFS_RESERVED_INODES 3 
 
 #ifdef DEBUG
 #define dbg_printf(fmt, ...) { \
@@ -17,13 +17,15 @@
 #define dbg_printf(fmt, ...) ((void) 0)
 #endif
 
-#define ZERO_ROOTDIR_INO 1
-#define ZERO SB_BLKNO 0
-#define ZERO_IMAP_BLKNO 1
-#define ZERO_ROOTDIR_DNO 4
 
-#define ZERO_LAST_RESERVED_BLK ZERO_ROOTDIR_DNO
-#define ZERO_LAST_RESERVED_INO ZERO_ROOTDIR_INO
+#define ZEROFS_SB_BLKNO 0
+#define ZEROFS_IMAP_BLKNO 1
+
+#define ZEROFS_ROOTDIR_INO 1
+#define ZEROFS_ROOTDIR_BLKNO 2
+
+#define ZEROFS_LAST_RESERVED_BLKNO ZEROFS_ROOTDIR_BLKNO
+#define ZEROFS_LAST_RESERVED_INO ZEROFS_ROOTDIR_INO
 
 struct zerofs_dir_record {
 	char filename[ZERO_FILENAME_MAXLEN];
@@ -42,12 +44,12 @@ struct zerofs_inode {
 	};
 };
 
-#define ZERO_MAX_FS_OBJECTS 64
+#define ZEROFS_MAX_FS_OBJECTS 64
 
-struct zero_super_block {
+struct zerofs_super_block {
 	uint64_t magic;
 	uint64_t block_size;
-	uint64_t inodes_count;
+	uint64_t inode_count;
 	uint64_t free_blocks;
 	char padding[4064];
 };

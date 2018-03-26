@@ -1,11 +1,16 @@
 obj-m := zerofs.o
 ccflags-y := -DDEBUG
 
-all:
+all: ko mkfs exp
+
+ko:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
 mkfs:
 	$(CC) -o mkfs mkfs.c
+
+exp:
+	$(CC) -o exp exp.c
 
 create:
 	dd bs=4096 count=100 if=/dev/zero of=test.img
@@ -22,5 +27,8 @@ umount:
 
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+
+clean-bin:
+	rm -f exp mkfs
 
 

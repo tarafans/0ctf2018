@@ -285,8 +285,10 @@ static loff_t zerofs_llseek(struct file *filp, loff_t offset, int whence)
 		case SEEK_SET:
 			if (offset < 0 || offset > zfs_inode->file_size)
 				return -EINVAL;
+			filp->f_pos = offset;
 			return offset;
 		case SEEK_END:
+			filp->f_pos = zfs_inode->file_size;
 			return zfs_inode->file_size;
 	}
 
@@ -598,8 +600,7 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_magic = ZEROFS_MAGIC;
 	sb->s_fs_info = zfs_sb;
 
-	sb->s_maxbytes = S64_MAX;
-	// sb->s_maxbytes = ZEROFS_DEFAULT_BLOCK_SIZE;
+	sb->s_maxbytes = ZEROFS_DEFAULT_BLOCK_SIZE;
 	sb->s_op = &zerofs_sops;
 
 	root_inode = new_inode(sb);

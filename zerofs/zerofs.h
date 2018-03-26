@@ -11,7 +11,7 @@
 
 #ifdef DEBUG
 #define dbg_printf(fmt, ...) { \
-	printk("[zerofs]:" fmt, ##__VA_ARGS__); \
+	printk("[zerofs]:" fmt, ##__VA_ARGS__) \
 }
 #else
 #define dbg_printf(fmt, ...) ((void) 0)

@@ -404,7 +404,8 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	struct inode *inode;
 	struct zerofs_inode *zfs_inode;
 	struct zerofs_inode *zfs_dir_inode;
-	struct zerofs_dir_record *zfs_dir_reocrd;
+	struct zerofs_dir_record *zfs_dir_record;
+	struct buffer_head *bh = NULL;
 
 	struct inode_operations *i_op;
 	struct file_operations *i_fop;
@@ -495,8 +496,8 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 		return ret;
 	}
 
-	mutext_unlock(&zerofs_inode_lock);
-	mutext_unlock(&zerofs_dir_lock);
+	mutex_unlock(&zerofs_inode_lock);
+	mutex_unlock(&zerofs_dir_lock);
 
 	inode_init_owner(inode, dir, mode);
 	d_add(dentry, inode);	
@@ -543,6 +544,7 @@ static struct inode *zerofs_iget(struct super_block *sb, uint64_t ino)
 static void zerofs_destroy_inode(struct inode *inode)
 {
 	struct zerofs_inode *zfs_inode = inode->i_private;
+	dbg_printf("Destroy zerofs inode %lld.\n", zfs_inode->ino);
 	kmem_cache_free(zerofs_inode_cachep, zfs_inode);
 }
 
@@ -557,6 +559,8 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	int ret;
 
 	bh = sb_bread(sb, ZEROFS_SB_BLKNO);
+	BUG_ON(!bh);
+
 	zfs_sb = (struct zerofs_super_block *)bh->b_data;
 
 	if (zfs_sb->magic != ZEROFS_MAGIC) {
@@ -565,6 +569,11 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	if (zfs_sb->block_size != ZEROFS_DEFAULT_BLOCK_SIZE) {
+		ret = -EINVAL;
+		goto fail;
+	}
+
+	if (zfs_sb->inode_count > ZEROFS_MAX_FS_OBJECTS) {
 		ret = -EINVAL;
 		goto fail;
 	}
@@ -615,10 +624,11 @@ static struct dentry *zerofs_mount(struct file_system_type *fs_type,
 
 	d = mount_bdev(fs_type, flags, dev_name, data, zerofs_fill_super);
 
-	if (IS_ERR(d))
+	if (IS_ERR(d)) {
 		dbg_printf("Mounting failed.\n");	
-	else
+	} else {
 		dbg_printf("Mounting successfully on %s\n", dev_name);
+	}
 
 	return d;
 }
@@ -638,22 +648,39 @@ struct file_system_type zerofs_type = {
 
 static int zerofs_init(void)
 {
+	int ret;
+
 	zerofs_inode_cachep = kmem_cache_create("zerofs_inode_cache", 
 									sizeof(struct zerofs_inode),
 									0,
 									(SLAB_RECLAIM_ACCOUNT| SLAB_MEM_SPREAD),
 									NULL);
 	
-	if (!zerofs_inode_cache)
+	if (!zerofs_inode_cachep)
 		return -ENOMEM;
 
-	dbg_printf("Hello zerofs!\n");
-	return 0;
+	ret = register_filesystem(&zerofs_type);
+	if (!ret) {
+		dbg_printf("Hello zerofs!\n");
+	} else {
+		dbg_printf("Fail to register zerofs!\n");
+	}
+
+	return ret;
 }
 
 static void zerofs_exit(void)
 {
-	dbg_printf("Byebye zerofs!\n");
+	int ret;
+
+	ret = unregister_filesystem(&zerofs_type);
+	kmem_cache_destroy(zerofs_inode_cachep);
+
+	if (!ret) {
+		dbg_printf("Byebye zerofs!\n");
+	} else {
+		dbg_printf("Fail to unregister zerofs!\n");
+	}
 }
 
 module_init(zerofs_init);

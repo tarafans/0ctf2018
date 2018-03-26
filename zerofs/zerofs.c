@@ -14,6 +14,80 @@ static DEFINE_MUTEX(zerofs_dir_lock);
 
 static struct kmem_cache *zerofs_inode_cachep;
 
+// mount 
+static struct dentry *zerofs_mount(struct file_system_type *fs_type,
+				     int flags, const char *dev_name,
+				     void *data);
+
+// super_block
+static void zerofs_sync_sb(struct super_block *sb);
+static int zerofs_fill_super(
+	struct super_block *sb, void *data, int silent);
+static void zerofs_kill_superblock(struct super_block *sb);
+
+// inode
+static struct zerofs_inode *zerofs_find_inode(
+	struct super_block *sb, 
+	struct zerofs_inode *start, 
+	struct zerofs_inode *target);
+static struct zerofs_inode *zerofs_get_inode(
+	struct super_block *sb, uint64_t ino);
+static int zerofs_sync_inode(
+	struct super_block *sb, 
+	struct zerofs_inode *zfs_inode);
+static void zerofs_add_inode(
+	struct super_block *sb, 
+	struct zerofs_inode *inode);
+static void zerofs_destroy_inode(struct inode *inode);
+
+// data block
+static int zerofs_get_datablock(
+	struct super_block *sb, uint64_t *dno);
+
+// inode operations
+static int zerofs_mkdir(
+	struct inode *dir, 
+	struct dentry *dentry, 
+	umode_t mode);
+static int zerofs_create(
+	struct inode *dir, 
+	struct dentry *dentry, 
+	umode_t mode, 
+	bool excl);
+static struct dentry *zerofs_lookup(
+	struct inode *dir, 
+	struct dentry *dentry, 
+	unsigned int flags);
+
+// dir operations
+static int zerofs_iterate(
+	struct file *filp, 
+	struct dir_context *ctx);
+
+// file operations
+static ssize_t zerofs_read(
+	struct file *filp, 
+	char __user *buf, 
+	size_t len, 
+	loff_t *ppos);
+static ssize_t zerofs_write(
+	struct file *filp, 
+	const char __user *buf, 
+	size_t len, 
+	loff_t *ppos);
+
+// helper
+static int zerofs_create_dir_or_file(
+	struct inode *dir, 
+	struct dentry *dentry, 
+	umode_t mode);
+
+static struct inode *zerofs_iget(
+	struct super_block *sb, 
+	uint64_t ino);
+
+
+
 static void zerofs_sync_sb(struct super_block *sb)
 {
 	struct buffer_head *bh = NULL;
@@ -166,7 +240,7 @@ static void zerofs_add_inode(struct super_block *sb, struct zerofs_inode *inode)
 	mutex_unlock(&zerofs_inode_lock);
 }
 
-int zerofs_iterate(struct file *filp, struct dir_context *ctx)
+static int zerofs_iterate(struct file *filp, struct dir_context *ctx)
 {
 	struct inode *inode = filp->f_inode;
 	struct super_block *sb = inode->i_sb;
@@ -198,7 +272,7 @@ int zerofs_iterate(struct file *filp, struct dir_context *ctx)
 	return 0;
 }
 
-ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos) 
+static ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos) 
 {
 	struct zerofs_inode *zfs_inode = filp->f_path.dentry->d_inode->i_private;
 	struct buffer_head *bh = NULL;
@@ -232,7 +306,7 @@ ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppo
 	return nbytes;
 }
 
-ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos)
+static ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos)
 {
 	struct super_block *sb = filp->f_path.dentry->d_inode->i_sb;
 	struct inode *inode = filp->f_path.dentry->d_inode;
@@ -283,16 +357,44 @@ ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t len, loff
 	return len;
 }
 
-static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, umode_t mode);
-
-int zerofs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+static int zerofs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	return zerofs_create_dir_or_file(dir, dentry, S_IFDIR | mode);
 }
 
-int zerofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
+static int zerofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
 {
 	return zerofs_create_dir_or_file(dir, dentry, mode);
+}
+
+static struct dentry *zerofs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
+{
+	struct zerofs_inode *zerofs_dir = dir->i_private;
+	struct super_block *sb = dir->i_sb;
+
+	struct buffer_head *bh = NULL;
+	struct zerofs_dir_record *zerofs_record;
+
+	int i;
+
+	if (dentry->d_name.len > ZEROFS_NAME_LEN)
+		return NULL;
+
+	bh = sb_bread(sb, zerofs_dir->dno);
+	BUG_ON(!bh);
+
+	zerofs_record = (struct zerofs_dir_record *)bh->b_data;
+	for (i = 0; i < zerofs_dir->children_count; i++) {
+		if (!strcmp(zerofs_record->filename, dentry->d_name.name)) {
+			struct inode *inode = zerofs_iget(sb, zerofs_record->ino);
+			inode_init_owner(inode, dir, ((struct zerofs_inode *)inode->i_private)->mode);
+			d_add(dentry, inode);
+			return NULL;
+		}
+		zerofs_record++;
+	}
+
+	return NULL;
 }
 
 static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, umode_t mode) 
@@ -438,43 +540,13 @@ static struct inode *zerofs_iget(struct super_block *sb, uint64_t ino)
 	return inode;
 }
 
-struct dentry *zerofs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
-{
-	struct zerofs_inode *zerofs_dir = dir->i_private;
-	struct super_block *sb = dir->i_sb;
-
-	struct buffer_head *bh = NULL;
-	struct zerofs_dir_record *zerofs_record;
-
-	int i;
-
-	if (dentry->d_name.len > ZEROFS_NAME_LEN)
-		return NULL;
-
-	bh = sb_bread(sb, zerofs_dir->dno);
-	BUG_ON(!bh);
-
-	zerofs_record = (struct zerofs_dir_record *)bh->b_data;
-	for (i = 0; i < zerofs_dir->children_count; i++) {
-		if (!strcmp(zerofs_record->filename, dentry->d_name.name)) {
-			struct inode *inode = zerofs_iget(sb, zerofs_record->ino);
-			inode_init_owner(inode, dir, ((struct zerofs_inode *)inode->i_private)->mode);
-			d_add(dentry, inode);
-			return NULL;
-		}
-		zerofs_record++;
-	}
-
-	return NULL;
-}
-
 static void zerofs_destroy_inode(struct inode *inode)
 {
 	struct zerofs_inode *zfs_inode = inode->i_private;
 	kmem_cache_free(zerofs_inode_cachep, zfs_inode);
 }
 
-int zerofs_fill_super(struct super_block *sb, void *data, int silent)
+static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct buffer_head *bh = NULL;
 	struct inode *root_inode;	

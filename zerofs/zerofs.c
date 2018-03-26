@@ -155,7 +155,7 @@ static int zerofs_get_datablock(struct super_block *sb, uint64_t *dno)
 		return -EINTR;
 	}
 
-	for (i = 3; i < ZEROFS_MAX_FS_OBJECTS; i++) {
+	for (i = 0; i < ZEROFS_MAX_FS_OBJECTS; i++) {
 		if (zfs_sb->free_blocks & (1 << i)) 
 			break;
 	}
@@ -196,6 +196,7 @@ static int zerofs_sync_inode(struct super_block *sb, struct zerofs_inode *zfs_in
 		mark_buffer_dirty(bh);
 		sync_dirty_buffer(bh);
 	} else {
+		brelse(bh);
 		mutex_unlock(&zerofs_sb_lock);
 		dbg_printf("Fail to update inode %lld (inode missing?).\n", zfs_inode->ino);
 		return -EIO;
@@ -280,8 +281,8 @@ static ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff
 	char *buffer;
 	size_t nbytes;
 
-	if (*ppos >= zfs_inode->file_size)
-		return 0;
+	// if (*ppos >= zfs_inode->file_size)
+	//	return 0;
 
 	bh = sb_bread(filp->f_path.dentry->d_inode->i_sb, zfs_inode->dno);
 
@@ -326,6 +327,7 @@ static ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t le
 		return 0;
 	}
 
+	// skip checks on ppos & len
 	buffer = (char *)bh->b_data;
 	buffer += *ppos;
 
@@ -356,6 +358,22 @@ static ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t le
 
 	return len;
 }
+
+static struct inode_operations zerofs_inode_ops = {
+	.create = zerofs_create,
+	.lookup = zerofs_lookup,
+	.mkdir = zerofs_mkdir,
+};
+
+const struct file_operations zerofs_file_ops = {
+	.read = zerofs_read,
+	.write = zerofs_write,
+};
+
+const struct file_operations zerofs_dir_ops = {
+	.owner = THIS_MODULE,
+	.iterate = zerofs_iterate,
+};
 
 static int zerofs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
@@ -407,9 +425,6 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	struct zerofs_dir_record *zfs_dir_record;
 	struct buffer_head *bh = NULL;
 
-	struct inode_operations *i_op;
-	struct file_operations *i_fop;
-
 	uint64_t count;
 	int ret;
 
@@ -434,21 +449,7 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	inode = new_inode(sb);
 
 	inode->i_sb = sb;
-	i_op = (struct inode_operations *)kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
-	i_op->create = zerofs_create;
-	i_op->lookup = zerofs_lookup;
-	i_op->mkdir = zerofs_mkdir;
-	inode->i_op = i_op;
-
-	i_fop = (struct file_operations *)kzalloc(sizeof(struct file_operations), GFP_KERNEL);
-	if (S_ISDIR(mode)) {
-		i_fop->iterate = zerofs_iterate;
-	} else if (S_ISREG(mode)) {
-		i_fop->read = zerofs_read;
-		i_fop->write = zerofs_write;
-	}
-	inode->i_fop = i_fop;
-
+	inode->i_op = &zerofs_inode_ops;
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	inode->i_ino = ZEROFS_START_INO + 1 + (count - ZEROFS_RESERVED_INODES);
 
@@ -457,10 +458,13 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	inode->i_private = zfs_inode;
 	zfs_inode->mode = mode;
 
-	if (S_ISDIR(mode))
+	if (S_ISDIR(mode)) {
 		zfs_inode->children_count = 0;
-	else if (S_ISREG(mode)) 
+		inode->i_fop = &zerofs_dir_ops;
+	} else if (S_ISREG(mode)) {
 		zfs_inode->file_size = 0;
+		inode->i_fop = &zerofs_file_ops;
+	}
 
 	if ((ret = zerofs_get_datablock(sb, &zfs_inode->dno)) < 0) {
 		dbg_printf("Fail to get a free data block.\n");
@@ -510,30 +514,17 @@ static struct inode *zerofs_iget(struct super_block *sb, uint64_t ino)
 	struct inode *inode;
 	struct zerofs_inode *zfs_inode;
 
-	struct inode_operations *i_op;
-	struct file_operations *i_fop;
-
 	zfs_inode = zerofs_get_inode(sb, ino);
 
 	inode = new_inode(sb);
 	inode->i_ino = ino;
 	inode->i_sb = sb;
-	i_op = kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
-	i_op->create = zerofs_create;
-	i_op->lookup = zerofs_lookup;
-	i_op->mkdir = zerofs_mkdir;
-	inode->i_op = i_op;
-
-	i_fop = kmalloc(sizeof(struct file_operations), GFP_KERNEL);
+	inode->i_op = &zerofs_inode_ops;
 	if (S_ISDIR(zfs_inode->mode)) {
-		memset((void *)i_fop, 0, sizeof(struct file_operations));
-		i_fop->iterate = zerofs_iterate;
+		inode->i_fop = &zerofs_dir_ops;
 	} else if (S_ISREG(zfs_inode->mode)) {
-		memset((void *)i_fop, 0, sizeof(struct file_operations));
-		i_fop->read = zerofs_read;
-		i_fop->write = zerofs_write;
+		inode->i_fop = &zerofs_file_ops;
 	}
-	inode->i_fop = i_fop;
 
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	inode->i_private = zfs_inode;
@@ -548,14 +539,15 @@ static void zerofs_destroy_inode(struct inode *inode)
 	kmem_cache_free(zerofs_inode_cachep, zfs_inode);
 }
 
+static const struct super_operations zerofs_sops = {
+	.destroy_inode = zerofs_destory_inode
+};
+
 static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct buffer_head *bh = NULL;
 	struct inode *root_inode;	
 	struct zerofs_super_block *zfs_sb;
-	struct super_operations *s_op;
-	struct inode_operations *i_op;
-	struct file_operations *i_fop;	
 	int ret;
 
 	bh = sb_bread(sb, ZEROFS_SB_BLKNO);
@@ -580,26 +572,17 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sb->s_magic = ZEROFS_MAGIC;
 	sb->s_fs_info = zfs_sb;
-	sb->s_maxbytes = ZEROFS_DEFAULT_BLOCK_SIZE;
-	s_op = (struct super_operations *)kzalloc(sizeof(struct super_operations), GFP_KERNEL);
-	s_op->destroy_inode = zerofs_destroy_inode;
-	sb->s_op = s_op;
+
+	sb->s_maxbytes = U64_MAX;
+	// sb->s_maxbytes = ZEROFS_DEFAULT_BLOCK_SIZE;
+	sb->s_op = &zerofs_sops;
 
 	root_inode = new_inode(sb);
 	root_inode->i_ino = ZEROFS_ROOTDIR_INO;
 	inode_init_owner(root_inode, NULL, S_IFDIR);
 	root_inode->i_sb = sb;
-
-	i_op = (struct inode_operations *)kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
-	i_op->create = zerofs_create;
-	i_op->lookup = zerofs_lookup;
-	i_op->mkdir = zerofs_mkdir;
-	root_inode->i_op = i_op;
-
-	i_fop = (struct file_operations *)kzalloc(sizeof(struct file_operations), GFP_KERNEL);
-	i_fop->iterate = zerofs_iterate;
-	root_inode->i_fop = i_fop;
-
+	root_inode->i_op = &zerofs_inode_ops;
+	root_inode->i_fop = &zerofs_dir_ops;
 	root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = CURRENT_TIME;
 	root_inode->i_private = (struct zerofs_inode *)zerofs_get_inode(sb, ZEROFS_ROOTDIR_INO);
 

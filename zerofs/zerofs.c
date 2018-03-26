@@ -75,6 +75,9 @@ static ssize_t zerofs_write(
 	const char __user *buf, 
 	size_t len, 
 	loff_t *ppos);
+static loff_t zerofs_llseek(
+	struct file *filp, 
+	loff_t offset, int whence);
 
 // helper
 static int zerofs_create_dir_or_file(
@@ -273,6 +276,23 @@ static int zerofs_iterate(struct file *filp, struct dir_context *ctx)
 	return 0;
 }
 
+static loff_t zerofs_llseek(struct file *filp, loff_t offset, int whence)
+{
+	struct inode *inode = filp->f_mapping->host;
+	struct zerofs_inode *zfs_inode = inode->i_private;
+
+	switch (whence) {
+		case SEEK_SET:
+			if (offset < 0 || offset > zfs_inode->file_size)
+				return -EINVAL;
+			return offset;
+		case SEEK_END:
+			return zfs_inode->file_size;
+	}
+
+	return -EINVAL;
+}
+
 static ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos) 
 {
 	struct zerofs_inode *zfs_inode = filp->f_path.dentry->d_inode->i_private;
@@ -281,8 +301,8 @@ static ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff
 	char *buffer;
 	size_t nbytes;
 
-	// if (*ppos >= zfs_inode->file_size)
-	//	return 0;
+	if (*ppos >= zfs_inode->file_size)
+		return 0;
 
 	bh = sb_bread(filp->f_path.dentry->d_inode->i_sb, zfs_inode->dno);
 
@@ -292,7 +312,10 @@ static ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff
 	}
 
 	buffer = (char *)bh->b_data;
+	buffer += *ppos;
+
 	nbytes = min((size_t)zfs_inode->file_size, len);
+	dbg_printf("Read buffer: %p len: %ld.\n", buffer, nbytes);
 
 	if (copy_to_user(buf, buffer, nbytes)) {
 		brelse(bh);
@@ -330,6 +353,7 @@ static ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t le
 	// skip checks on ppos & len
 	buffer = (char *)bh->b_data;
 	buffer += *ppos;
+	dbg_printf("Write buffer: %p len: %ld.\n", buffer, len);
 
 	if (copy_from_user(buffer, buf, len)) {
 		brelse(bh);
@@ -366,6 +390,7 @@ static struct inode_operations zerofs_inode_ops = {
 };
 
 const struct file_operations zerofs_file_ops = {
+	.llseek = zerofs_llseek,
 	.read = zerofs_read,
 	.write = zerofs_write,
 };
@@ -540,7 +565,7 @@ static void zerofs_destroy_inode(struct inode *inode)
 }
 
 static const struct super_operations zerofs_sops = {
-	.destroy_inode = zerofs_destory_inode
+	.destroy_inode = zerofs_destroy_inode
 };
 
 static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
@@ -548,7 +573,7 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	struct buffer_head *bh = NULL;
 	struct inode *root_inode;	
 	struct zerofs_super_block *zfs_sb;
-	int ret;
+	int ret = 0;
 
 	bh = sb_bread(sb, ZEROFS_SB_BLKNO);
 	BUG_ON(!bh);
@@ -573,7 +598,7 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_magic = ZEROFS_MAGIC;
 	sb->s_fs_info = zfs_sb;
 
-	sb->s_maxbytes = U64_MAX;
+	sb->s_maxbytes = S64_MAX;
 	// sb->s_maxbytes = ZEROFS_DEFAULT_BLOCK_SIZE;
 	sb->s_op = &zerofs_sops;
 

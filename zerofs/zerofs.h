@@ -10,11 +10,9 @@
 #define ZEROFS_RESERVED_INODES 3 
 
 #ifdef DEBUG
-#define dbg_printf(fmt, ...) { \
-	printk("[zerofs]:" fmt, ##__VA_ARGS__) \
-}
+#define dbg_printf(...) printk("[zerofs]: " __VA_ARGS__)
 #else
-#define dbg_printf(fmt, ...) ((void) 0)
+#define dbg_printf(...) ((void) 0)
 #endif
 
 

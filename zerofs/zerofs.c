@@ -16,10 +16,10 @@ static struct kmem_cache *zerofs_inode_cachep;
 
 static void zerofs_sync_sb(struct super_block *sb)
 {
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 	struct zerofs_super_block *zfs_sb = sb->s_fs_info;
 
-	bh = sb_bread(vsb, ZEROFS_SB_BLKNO);
+	bh = sb_bread(sb, ZEROFS_SB_BLKNO);
 	BUG_ON(!bh);
 
 	bh->b_data = (char *)zfs_sb;
@@ -42,6 +42,33 @@ static struct zerofs_inode *zerofs_find_inode(struct super_block *sb, struct zer
 		return start;
 
 	return NULL;
+}
+
+static struct zerofs_inode *zerofs_get_inode(struct super_block *sb, uint64_t ino)
+{
+	struct zerofs_super_block *zfs_sb = sb->s_fs_info;
+	struct zerofs_inode *zfs_inode_iter;
+	struct zerofs_inode *ret = NULL;
+	struct buffer_head *bh = NULL;
+
+	int i;
+
+	bh = sb_bread(sb, ZEROFS_IMAP_BLKNO);
+	BUG_ON(!bh);	
+
+	zfs_inode_iter = (struct zerofs_inode *)bh->b_data;
+
+	for (i = 0; i < zfs_sb->inode_count; i++) {
+		if (zfs_inode_iter->ino == ino) {
+			ret = (struct zerofs_inode *)kmem_cache_alloc(zerofs_inode_cachep, GFP_KERNEL);
+			memcpy((void *)ret, (void *)zfs_inode_iter, sizeof(struct zerofs_inode));
+			break;
+		}
+		zfs_inode_iter++;
+	}
+
+	brelse(bh);
+	return ret;
 }
 
 static int zerofs_get_datablock(struct super_block *sb, uint64_t *dno) 
@@ -77,7 +104,7 @@ static int zerofs_get_datablock(struct super_block *sb, uint64_t *dno)
 static int zerofs_sync_inode(struct super_block *sb, struct zerofs_inode *zfs_inode)
 {
 	struct zerofs_inode *_zfs_inode;
-	struct buffer_head *bh;	
+	struct buffer_head *bh = NULL;	
 
 	bh = sb_bread(sb, ZEROFS_IMAP_BLKNO);
 	BUG_ON(!bh);
@@ -111,18 +138,18 @@ static void zerofs_add_inode(struct super_block *sb, struct zerofs_inode *inode)
 {
 	struct zerofs_super_block *zfs_sb = sb->s_fs_info;
 	struct zerofs_inode *zfs_inode;
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 
 	if (mutex_lock_interruptible(&zerofs_inode_lock)) {
 		dbg_printf("Failed to acquire lock when adding a zerofs inode.\n");
 		return;
 	}
 
-	bh = sb_bread(vsb, ZEROFS_IMAP_BLKNO);
+	bh = sb_bread(sb, ZEROFS_IMAP_BLKNO);
 	BUG_ON(!bh);
 
 	zfs_inode = (struct zerofs_inode *)bh->b_data;
-	if (mutex_lock_interruptible(&simplefs_sb_lock)) {
+	if (mutex_lock_interruptible(&zerofs_sb_lock)) {
 		dbg_printf("Failed to acquire lock when adding a zerofs inode.\n");
 		return;
 	}
@@ -141,16 +168,18 @@ static void zerofs_add_inode(struct super_block *sb, struct zerofs_inode *inode)
 
 int zerofs_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_inode;
 	struct super_block *sb = inode->i_sb;
 	struct zerofs_inode *zfs_inode = inode->i_private;
 	struct zerofs_dir_record *zfs_dir_rec;
+	struct buffer_head *bh = NULL;
+	int i;
 	
 	if (ctx->pos)
 		return 0;
 
 	if (!S_ISDIR(zfs_inode->mode)) {
-		dbg_printf("%s is not a directory.\n", filp->f_dentry->d_name.name);
+		dbg_printf("Try to iterate non-directory.\n");
 		return -ENOTDIR;
 	}
 
@@ -172,7 +201,7 @@ int zerofs_iterate(struct file *filp, struct dir_context *ctx)
 ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos) 
 {
 	struct zerofs_inode *zfs_inode = filp->f_path.dentry->d_inode->i_private;
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 
 	char *buffer;
 	size_t nbytes;
@@ -206,15 +235,16 @@ ssize_t zerofs_read(struct file *filp, char __user *buf, size_t len, loff_t *ppo
 ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos)
 {
 	struct super_block *sb = filp->f_path.dentry->d_inode->i_sb;
-	struct zerofs_super_block *zfs_sb = sb->s_fs_info;
-	struct inode *inode = filp->f_path.dentry->d_inode;;
-	struct zerofs_inode *zfs_inode = inode->i_private;
+	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct zerofs_super_block *zfs_sb;
+	struct zerofs_inode *zfs_inode;
+	struct buffer_head *bh = NULL;
+
 	char *buffer;
 	int ret;
 
-	ret = generic_write_checks(filp, ppos, &len, 0);
-	if (ret)
-		return ret;
+	zfs_sb = sb->s_fs_info;
+	zfs_inode = inode->i_private;
 
 	bh = sb_bread(sb, zfs_inode->dno);
 	if (!bh) {
@@ -253,6 +283,18 @@ ssize_t zerofs_write(struct file *filp, const char __user *buf, size_t len, loff
 	return len;
 }
 
+static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, umode_t mode);
+
+int zerofs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+	return zerofs_create_dir_or_file(dir, dentry, S_IFDIR | mode);
+}
+
+int zerofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
+{
+	return zerofs_create_dir_or_file(dir, dentry, mode);
+}
+
 static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, umode_t mode) 
 {
 	struct super_block *sb = dir->i_sb;
@@ -261,6 +303,10 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	struct zerofs_inode *zfs_inode;
 	struct zerofs_inode *zfs_dir_inode;
 	struct zerofs_dir_record *zfs_dir_reocrd;
+
+	struct inode_operations *i_op;
+	struct file_operations *i_fop;
+
 	uint64_t count;
 	int ret;
 
@@ -269,7 +315,7 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 		return -EINTR;
 	}
 
-	count = zfs_sb->inodes_count;
+	count = zfs_sb->inode_count;
 	if (count >= ZEROFS_MAX_FS_OBJECTS) {
 		dbg_printf("Maximum number of file system objects is reached.\n");
 		mutex_unlock(&zerofs_dir_lock);
@@ -285,18 +331,20 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	inode = new_inode(sb);
 
 	inode->i_sb = sb;
-	inode->i_op = kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
-	inode->i_op->create = zerofs_create;
-	inode->i_op->lookup = zerofs_lookup;
-	inode->i_op->mkdir = zerofs_mkdir;
+	i_op = (struct inode_operations *)kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
+	i_op->create = zerofs_create;
+	i_op->lookup = zerofs_lookup;
+	i_op->mkdir = zerofs_mkdir;
+	inode->i_op = i_op;
 
-	inode->i_fop = kzalloc(sizeof(struct file_operations), GFP_KERNEL);
+	i_fop = (struct file_operations *)kzalloc(sizeof(struct file_operations), GFP_KERNEL);
 	if (S_ISDIR(mode)) {
-		inode->i_fop->iterate = zerofs_iterate;
+		i_fop->iterate = zerofs_iterate;
 	} else if (S_ISREG(mode)) {
-		inode->i_fop->read = zerofs_read;
-		inode->i_fop->write = zerofs_write;
+		i_fop->read = zerofs_read;
+		i_fop->write = zerofs_write;
 	}
+	inode->i_fop = i_fop;
 
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	inode->i_ino = ZEROFS_START_INO + 1 + (count - ZEROFS_RESERVED_INODES);
@@ -354,43 +402,38 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 	return 0;
 }
 
-int zerofs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
-{
-	return zerofs_create_dir_or_file(dir, dentry, S_IFDIR | mode);
-}
-
-int zerofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
-{
-	return zerofs_create_dir_or_file(dir, dentry, mode);
-}
-
 static struct inode *zerofs_iget(struct super_block *sb, uint64_t ino) 
 {
 	struct inode *inode;
-	struct zerofs_inode *zerofs_inode;
+	struct zerofs_inode *zfs_inode;
 
-	zerofs_inode = zerofs_get_inode(sb, ino);
+	struct inode_operations *i_op;
+	struct file_operations *i_fop;
+
+	zfs_inode = zerofs_get_inode(sb, ino);
 
 	inode = new_inode(sb);
 	inode->i_ino = ino;
 	inode->i_sb = sb;
-	inode->i_op = kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
-	inode->i_op->create = zerofs_create;
-	inode->i_op->lookup = zerofs_lookup;
-	inode->i_op->mkdir = zerofs_mkdir;
+	i_op = kzalloc(sizeof(struct inode_operations), GFP_KERNEL);
+	i_op->create = zerofs_create;
+	i_op->lookup = zerofs_lookup;
+	i_op->mkdir = zerofs_mkdir;
+	inode->i_op = i_op;
 
-	inode->i_fop = kmalloc(sizeof(struct file_operations), GFP_KERNEL);
-	if (S_ISDIR(sfs_inode->mode)) {
-		memset(inode->i_fop, 0, sizeof(struct file_operations));
-		inode->i_fop->iterate = zerofs_iterate;
-	} else if (S_ISREG(sfs_inode->mode)) {
-		memset(inode->i_fop, 0, sizeof(struct file_operations));
-		inode->i_fop->read = zerofs_read;
-		inode->i_fop->write = zerofs_write;
+	i_fop = kmalloc(sizeof(struct file_operations), GFP_KERNEL);
+	if (S_ISDIR(zfs_inode->mode)) {
+		memset((void *)i_fop, 0, sizeof(struct file_operations));
+		i_fop->iterate = zerofs_iterate;
+	} else if (S_ISREG(zfs_inode->mode)) {
+		memset((void *)i_fop, 0, sizeof(struct file_operations));
+		i_fop->read = zerofs_read;
+		i_fop->write = zerofs_write;
 	}
+	inode->i_fop = i_fop;
 
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
-	inode->i_private = zerofs_inode;
+	inode->i_private = zfs_inode;
 
 	return inode;
 }
@@ -400,7 +443,7 @@ struct dentry *zerofs_lookup(struct inode *dir, struct dentry *dentry, unsigned 
 	struct zerofs_inode *zerofs_dir = dir->i_private;
 	struct super_block *sb = dir->i_sb;
 
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
 	struct zerofs_dir_record *zerofs_record;
 
 	int i;
@@ -433,14 +476,15 @@ static void zerofs_destroy_inode(struct inode *inode)
 
 int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 {
-	struct buffer_head *bh;
+	struct buffer_head *bh = NULL;
+	struct inode *root_inode;	
 	struct zerofs_super_block *zfs_sb;
 	struct super_operations *s_op;
 	struct inode_operations *i_op;
 	struct file_operations *i_fop;	
 	int ret;
 
-	bh = sb_bread(sb, SIMPLEFS_SUPERBLOCK_BLOCK_NUMBER);
+	bh = sb_bread(sb, ZEROFS_SB_BLKNO);
 	zfs_sb = (struct zerofs_super_block *)bh->b_data;
 
 	if (zfs_sb->magic != ZEROFS_MAGIC) {
@@ -476,7 +520,7 @@ int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	root_inode->i_fop = i_fop;
 
 	root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = CURRENT_TIME;
-	root_inode->i_private = zerofs_get_inode(sb, ZEROFS_ROOTDIR_INO);
+	root_inode->i_private = (struct zerofs_inode *)zerofs_get_inode(sb, ZEROFS_ROOTDIR_INO);
 
 	sb->s_root = d_make_root(root_inode);
 

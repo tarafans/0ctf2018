@@ -28,7 +28,7 @@
 #define ZEROFS_LAST_RESERVED_INO ZEROFS_ROOTDIR_INO
 
 struct zerofs_dir_record {
-	char filename[ZERO_FILENAME_MAXLEN];
+	char filename[ZEROFS_NAME_LEN];
 	uint64_t ino;
 };
 

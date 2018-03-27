@@ -21,14 +21,16 @@ int main(int argc, char *argv[]) {
 	read(fd, buf, 4);
 	printf("buf: %s\n", buf);
 
-	int ret = lseek(fd, 13337, SEEK_SET);
-	printf("lseek: %d\n", ret);
+	// int ret = lseek(fd, 0x1000, SEEK_SET);
+	// printf("lseek: %d\n", ret);
 
-	read(fd, buf, 4);
-	printf("buf: %s\n", buf);
-
-	ret = write(fd, buf, 4);
-	printf("write: %d\n", ret);
+	unsigned int i, j;
+	void *p;
+	for (j = 0; j < 0x10000 / 8; j++) {
+		lseek(fd, 0x1000 + j * 8, SEEK_SET);
+		read(fd, &p, 8);
+		printf("%p\n", p);
+	}
 
 	close(fd);
 

@@ -283,6 +283,7 @@ static loff_t zerofs_llseek(struct file *filp, loff_t offset, int whence)
 
 	switch (whence) {
 		case SEEK_SET:
+			dbg_printf("llseek offset: %lld size: %lld\n", offset, zfs_inode->file_size);
 			if (offset < 0 || offset > zfs_inode->file_size)
 				return -EINVAL;
 			filp->f_pos = offset;
@@ -477,7 +478,7 @@ static int zerofs_create_dir_or_file(struct inode *dir, struct dentry *dentry, u
 
 	inode->i_sb = sb;
 	inode->i_op = &zerofs_inode_ops;
-	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+	inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
 	inode->i_ino = ZEROFS_START_INO + 1 + (count - ZEROFS_RESERVED_INODES);
 
 	zfs_inode = kmem_cache_alloc(zerofs_inode_cachep, GFP_KERNEL);
@@ -553,7 +554,7 @@ static struct inode *zerofs_iget(struct super_block *sb, uint64_t ino)
 		inode->i_fop = &zerofs_file_ops;
 	}
 
-	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+	inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
 	inode->i_private = zfs_inode;
 
 	return inode;
@@ -609,7 +610,7 @@ static int zerofs_fill_super(struct super_block *sb, void *data, int silent)
 	root_inode->i_sb = sb;
 	root_inode->i_op = &zerofs_inode_ops;
 	root_inode->i_fop = &zerofs_dir_ops;
-	root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = CURRENT_TIME;
+	root_inode->i_atime = root_inode->i_mtime = root_inode->i_ctime = current_time(root_inode);
 	root_inode->i_private = (struct zerofs_inode *)zerofs_get_inode(sb, ZEROFS_ROOTDIR_INO);
 
 	sb->s_root = d_make_root(root_inode);

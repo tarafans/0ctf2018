@@ -19,7 +19,7 @@ create:
 mount:
 	sudo mount -o loop,owner,group,users -t zerofs test.img mnt
 	# we do not have perm in zerofs
-	sudo chown wen.wen mnt -R 
+	sudo chown 1000.1000 mnt -R 
 	sudo chmod a+rwx mnt -R
 
 umount:

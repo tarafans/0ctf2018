@@ -1,1 +1,0 @@
-cmd_/home/test/0ctf2018/zerofs/zerofs.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /home/test/0ctf2018/zerofs/zerofs.ko /home/test/0ctf2018/zerofs/zerofs.o /home/test/0ctf2018/zerofs/zerofs.mod.o ;  true

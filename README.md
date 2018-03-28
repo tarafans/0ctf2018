@@ -4,8 +4,11 @@
 kaslr + smep
 
 ## Organization
+
 public/: give to players
+
 release/: deploy
+
 zerofs/: source
 
 ## Disk layout
@@ -30,5 +33,7 @@ before the buffer of the file. This creates certain difficulties.
 I believe this file system has more bugs...very buggy...but this way is most intuitive...
 
 ## Flag
-sha256sum flag
+
+sha256sum /root/flag
+
 flag{600291f9a05a1e78215aa48c9ff6a4b1bb207c2b4ffa66223fcc67c04281397f}

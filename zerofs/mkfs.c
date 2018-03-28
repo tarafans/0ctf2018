@@ -12,6 +12,19 @@
 #define VULNFILE_BLKNO (ZEROFS_LAST_RESERVED_BLKNO + 1)
 #define VULNFILE_INO (ZEROFS_LAST_RESERVED_INO + 1)
 
+/*
+ * disk layout
+ * block 0: super block
+ * block 1: inode map
+ *      | struct zerofs_inode | struct zerofs_inode | ...
+ * block 2: root dir's content
+ * block 3 - block n: file or directory's content
+ * Note that for file, the content block contains its data
+ * For directory, the content block contains an array of struct zerofs_dir_record,
+ * each of its entry indicates a file or a sub-directory under it
+ * 
+ */
+
 static int write_sb(int fd)
 {
 	struct zerofs_super_block sb = {
@@ -135,6 +148,17 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+    // create an image
+    size_t image_size = 4096 * 8;
+    char *buf = malloc(image_size);    
+    fd = open(argv[1], O_RDWR | O_TRUNC | O_CREAT, 0666);
+    if (write(fd, buf, image_size) != image_size) {
+        printf("creating image error!\n");
+        return -1;
+    }
+    close(fd);
+
+    // write file metadata
 	fd = open(argv[1], O_RDWR);
 	if (fd == -1) {
 		perror("Fail to open the device");

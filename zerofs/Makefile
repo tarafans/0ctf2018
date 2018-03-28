@@ -1,20 +1,18 @@
 obj-m := zerofs.o
 ccflags-y := -DDEBUG
 
-all: ko mkfs exp
+all: ko util exp
 
 ko:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
-mkfs:
-	$(CC) -o mkfs mkfs.c
+util:
+	$(CC) -static -o mount mount.c
+	$(CC) -static -o umount umount.c
 
 exp:
-	$(CC) -o exp exp.c
-
-create:
-	dd bs=4096 count=100 if=/dev/zero of=test.img
-	./mkfs test.img
+	$(CC) -static -o mkfs mkfs.c 
+	$(CC) -static -o exp exp.c -lpthread
 
 mount:
 	sudo mount -o loop,owner,group,users -t zerofs test.img mnt
@@ -28,7 +26,10 @@ umount:
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 
-clean-bin:
-	rm -f exp mkfs
+clean-util:
+	rm -f mount umount
+
+clean-exp:
+	rm -f mkfs exp
 
 

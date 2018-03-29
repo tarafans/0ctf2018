@@ -15,7 +15,7 @@ int main(int argc, char *argv[])
         args[2] = "loop";
         args[3] = "-t";
         args[4] = "zerofs";
-        args[5] = argv[1];
+        args[5] = "/tmp/zerofs.img";
         args[6] = "/mnt";
         args[7] = NULL;
         execvp("/bin/mount", args);
